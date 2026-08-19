@@ -1,0 +1,8 @@
+node_modules
+.env
+.env.local
+.git
+README.md
+firestore.rules
+r2-cors-policy.local.json
+r2-cors-policy.production.example.json
