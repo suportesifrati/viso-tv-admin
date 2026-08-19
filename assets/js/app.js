@@ -1,7 +1,7 @@
 
 import { APP_CONFIG } from './config.js';
 import { $,qsa,setNotice,normalizeText,statusOf,statusText,formatDate,inputDate,bytes } from './utils.js';
-import { session,login,sendReset,list,getDoc,save,patch,remove,bumpVersion,createUser,sv,bv,iv,tv,arr } from './services/firebase.js';
+import { session,login,restoreSession,clearSavedSession,sendReset,list,getDoc,save,patch,remove,bumpVersion,createUser,sv,bv,iv,tv,arr } from './services/firebase.js';
 import { uploadToR2,usage } from './services/r2.js';
 import { renderDashboard,mediaRows,playlistCards,playlistItems } from './ui/render.js';
 
@@ -144,9 +144,50 @@ function previewPlaylist(){
   const p=state.playlists.find(x=>x.id===state.currentPlaylistId),map=new Map(state.media.map(m=>[m.id,m]));const first=(p?.items||[]).sort((a,b)=>a.order-b.order)[0];const m=first&&map.get(first.mediaId);if(m)previewMedia(m)
 }
 
-$('loginBtn').onclick=async()=>{try{setNotice($('loginNotice'),'Entrando...');await login($('loginEmail').value.trim(),$('loginPass').value);$('loginView').classList.add('hidden');$('adminView').classList.remove('hidden');$('sessionEmail').textContent=session.email;await loadAll();try{state.usage=await usage();renderDashboard(state)}catch{}}catch(e){setNotice($('loginNotice'),`Erro: ${e.message}`,'error')}};
+async function enterAdmin(){
+  $('loginView').classList.add('hidden');
+  $('adminView').classList.remove('hidden');
+  $('sessionEmail').textContent=session.email;
+  await loadAll();
+  try{
+    state.usage=await usage();
+    renderDashboard(state);
+  }catch{}
+}
+
+async function handleLogin(){
+  try{
+    setNotice($('loginNotice'),'Entrando...');
+    await login($('loginEmail').value.trim(),$('loginPass').value);
+    await enterAdmin();
+  }catch(e){
+    setNotice($('loginNotice'),`Erro: ${e.message}`,'error');
+  }
+}
+
+$('loginForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  await handleLogin();
+});
+
+async function bootstrapSession(){
+  try{
+    setNotice($('loginNotice'),'Verificando sessão...');
+    const restored=await restoreSession();
+    if(restored){
+      await enterAdmin();
+      return;
+    }
+    setNotice($('loginNotice'),'Aguardando login.');
+  }catch{
+    setNotice($('loginNotice'),'Aguardando login.');
+  }
+}
+
+bootstrapSession();
+
 $('resetLink').onclick=async()=>{try{const e=$('loginEmail').value.trim();if(!e)throw new Error('Informe o e-mail.');await sendReset(e);setNotice($('loginNotice'),'E-mail de recuperação enviado.','ok')}catch(e){setNotice($('loginNotice'),`Erro: ${e.message}`,'error')}};
-$('logoutBtn').onclick=()=>location.reload();
+$('logoutBtn').onclick=()=>{clearSavedSession();location.reload();};
 qsa('.nav button').forEach(b=>b.onclick=()=>switchView(b.dataset.view));
 qsa('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).close());
 $('quickNew').onclick=()=>openMedia();$('newMediaBtn').onclick=()=>openMedia();$('saveMediaBtn').onclick=saveMediaForm;

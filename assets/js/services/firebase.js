@@ -1,7 +1,7 @@
 
 import { APP_CONFIG } from '../config.js';
 
-export let session={token:null,uid:null,email:null,role:null};
+export let session={token:null,uid:null,email:null,role:null,refreshToken:null};
 const base=()=>`https://firestore.googleapis.com/v1/projects/${APP_CONFIG.firebase.projectId}/databases/(default)/documents`;
 const headers=()=>({Authorization:`Bearer ${session.token}`,'Content-Type':'application/json'});
 
@@ -29,16 +29,102 @@ export const arr=v=>({arrayValue:{values:(v||[]).map(x=>({mapValue:{fields:{
 
 export async function login(email,password){
   const r=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${APP_CONFIG.firebase.apiKey}`,{
-    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,returnSecureToken:true})
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email,password,returnSecureToken:true})
   });
-  const d=await r.json();if(!r.ok)throw new Error(d?.error?.message||'Falha no login.');
-  session={token:d.idToken,uid:d.localId,email:d.email,role:'admin'};
-  if(session.email.toLowerCase()!==APP_CONFIG.mainAdmin){
-    const p=await getDoc(`users/${session.uid}`);if(!p?.active)throw new Error('Usuário sem acesso.');
-    session.role=p.role||'viewer';
-  }
+  const d=await r.json();
+  if(!r.ok)throw new Error(d?.error?.message||'Falha no login.');
+
+  session={
+    token:d.idToken,
+    uid:d.localId,
+    email:d.email,
+    role:'admin',
+    refreshToken:d.refreshToken
+  };
+
+  await resolveRole();
+  persistSession();
   return session;
 }
+
+const SESSION_KEY='viso_tv_firebase_session';
+
+function persistSession(){
+  if(!session.refreshToken)return;
+  localStorage.setItem(SESSION_KEY,JSON.stringify({
+    refreshToken:session.refreshToken,
+    email:session.email
+  }));
+}
+
+export function clearSavedSession(){
+  localStorage.removeItem(SESSION_KEY);
+  session={token:null,uid:null,email:null,role:null,refreshToken:null};
+}
+
+async function resolveRole(){
+  session.role='admin';
+
+  if(session.email.toLowerCase()!==APP_CONFIG.mainAdmin){
+    const p=await getDoc(`users/${session.uid}`);
+    if(!p?.active)throw new Error('Usuário sem acesso.');
+    session.role=p.role||'viewer';
+  }
+}
+
+async function refreshFirebaseSession(refreshToken){
+  const body=new URLSearchParams({
+    grant_type:'refresh_token',
+    refresh_token:refreshToken
+  });
+
+  const r=await fetch(`https://securetoken.googleapis.com/v1/token?key=${APP_CONFIG.firebase.apiKey}`,{
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body
+  });
+
+  const d=await r.json();
+  if(!r.ok)throw new Error(d?.error?.message||'Sessão expirada.');
+
+  session={
+    token:d.id_token,
+    uid:d.user_id,
+    email:d.user_email||'',
+    role:'admin',
+    refreshToken:d.refresh_token||refreshToken
+  };
+
+  // Algumas respostas de refresh podem não trazer user_email.
+  if(!session.email){
+    const lookup=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${APP_CONFIG.firebase.apiKey}`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({idToken:session.token})
+    });
+    const userData=await lookup.json();
+    if(!lookup.ok||!userData.users?.[0])throw new Error('Não foi possível restaurar a sessão.');
+    session.email=userData.users[0].email||'';
+  }
+
+  await resolveRole();
+  persistSession();
+  return session;
+}
+
+export async function restoreSession(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');
+    if(!saved?.refreshToken)return null;
+    return await refreshFirebaseSession(saved.refreshToken);
+  }catch(error){
+    clearSavedSession();
+    return null;
+  }
+}
+
 export async function sendReset(email){
   const r=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${APP_CONFIG.firebase.apiKey}`,{
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestType:'PASSWORD_RESET',email})
